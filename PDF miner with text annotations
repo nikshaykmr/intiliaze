@@ -1,0 +1,228 @@
+import sys
+import os
+import time
+import numpy as np
+from pdfminer.high_level import extract_text
+
+# Initialize paths
+pdfs_folder = r"C:\Azeem's Work\Project 2023-24\pdfminer\sample\pdfs"
+annotations_folder = r"C:\Azeem's Work\Project 2023-24\pdfminer\sample\annotations"
+utils_folder = r"C:\Azeem's Work\Project 2023-24\pdfminer\utils"
+
+# Caution: path[0] is reserved for script path (or '' in REPL)
+sys.path.insert(1, utils_folder)
+
+# Initialize variables
+fin_tp = lr_tp = gt_tp = m_tp = sa_tp = p_tp = o_tp = 0
+fin_fp = lr_fp = gt_fp = m_fp = sa_fp = p_fp = o_fp = 0
+fin_m = lr_m = gt_m = m_m = sa_m = p_m = o_m = 0
+fin_n = lr_n = gt_n = m_n = sa_n = p_n = o_n = 0
+fin_c = lr_c = gt_c = m_c = sa_c = p_c = o_c = 0
+undetected_pdfs = empty_text_files = 0
+gt_collated = ''
+et_collated = ''
+t_parse = []
+
+# Function to determine the document type based on the filename or content
+def determine_doc_type(filename):
+    if "financial" in filename.lower():
+        return "financial_reports"
+    elif "tender" in filename.lower():
+        return "government_tenders"
+    elif "law" in filename.lower() or "regulation" in filename.lower():
+        return "laws_and_regulations"
+    elif "manual" in filename.lower():
+        return "manuals"
+    elif "scientific" in filename.lower() or "article" in filename.lower():
+        return "scientific_articles"
+    else:
+        return "patents"
+
+# Function to process text files into a structured format
+def process_text_file(filepath):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    if lines:
+        data = []
+        for line in lines:
+            parts = line.strip().split('\t')
+            if len(parts) == 10:
+                entry = {
+                    "token": parts[0],
+                    "x0": float(parts[1]),
+                    "y0": float(parts[2]),
+                    "x1": float(parts[3]),
+                    "y1": float(parts[4]),
+                    "R": int(parts[5]),
+                    "G": int(parts[6]),
+                    "B": int(parts[7]),
+                    "font_name": parts[8],
+                    "label": parts[9]
+                }
+                data.append(entry)
+        return data
+    else:
+        return None
+
+# Function to convert ground truth data to a structured format
+def separate_token_format_gt_from_text(data):
+    tokens_gt = [entry['token'] for entry in data]
+    return {"tokens_gt": tokens_gt}
+
+# Function to convert extracted text to a structured format
+def separate_token_format_et(text):
+    tokens_et = text.split()
+    return {"tokens_et": tokens_et}
+
+# Function to calculate similarity matrix between extracted tokens and ground truth tokens
+def similarity_matrix(tokens_et, tokens_gt):
+    matrix = np.zeros((len(tokens_et), len(tokens_gt)))
+    for i, token_et in enumerate(tokens_et):
+        for j, token_gt in enumerate(tokens_gt):
+            if token_et == token_gt:
+                matrix[i, j] = 1
+    return matrix
+
+# Function to compute true positives, false positives, and other metrics
+def compute_tpfp(matrix):
+    tp = np.sum(matrix)
+    fp = matrix.shape[0] - tp
+    m = matrix.shape[1] - tp
+    n = matrix.size - tp - fp - m
+    return tp, fp, m, n
+
+# Function to calculate scores based on tp, m, and n
+def calculate_scores(tp, m, n):
+    if tp + m + n == 0:
+        return 0
+    return tp / (tp + m + n)
+
+# Directory of files
+text_list = os.listdir(annotations_folder)
+
+for file in text_list:
+    filepath = os.path.join(annotations_folder, file)
+    
+    # Debugging: Output the current file being processed
+    print(f"Processing file: {file}")
+
+    # Process ground truth from text file
+    gt_data = process_text_file(filepath)
+    if not gt_data:
+        empty_text_files += 1
+        print(f"Skipping empty text file: {file}")
+        continue
+
+    # Debugging: Output ground truth content
+    print(f"Ground truth for {file}: {gt_data[:1]}...")  # Print first entry for brevity
+
+    # Get a dataframe-like representation of ground truth (assuming function exists)
+    df2 = separate_token_format_gt_from_text(gt_data)
+
+    # PDF Parsing
+    t1 = time.time()
+    pdf_filepath = os.path.join(pdfs_folder, os.path.splitext(file)[0] + '.pdf')
+    try:
+        text = extract_text(pdf_filepath)
+    except Exception as e:
+        print(f"Error extracting text from {pdf_filepath}: {e}")
+        undetected_pdfs += 1
+        continue
+
+    t2 = time.time()
+    t_parse.append(t2 - t1)
+
+    if not text.split():
+        undetected_pdfs += 1
+        print(f"No text extracted from PDF: {pdf_filepath}")
+        continue
+
+    # Debugging: Output extracted text content
+    print(f"Extracted text for {file}: {text[:100]}...")  # Print first 100 characters for brevity
+
+    # Extracted text as a dataframe in separate token format (assuming function exists)
+    df3 = separate_token_format_et(text)
+
+    # Token-wise evaluation (assuming function exists)
+    matrix = similarity_matrix(df3['tokens_et'], df2['tokens_gt'])
+    tp, fp, m, n = compute_tpfp(matrix)
+
+    # Assigning values based on doc type
+    doc_type = determine_doc_type(file)
+    if doc_type == 'financial_reports':
+        fin_tp += tp
+        fin_fp += fp
+        fin_m += m
+        fin_n += n
+        fin_c += 1
+    elif doc_type == 'government_tenders':
+        gt_tp += tp
+        gt_fp += fp
+        gt_m += m
+        gt_n += n
+        gt_c += 1
+    elif doc_type == 'laws_and_regulations':
+        lr_tp += tp
+        lr_fp += fp
+        lr_m += m
+        lr_n += n
+        lr_c += 1
+    elif doc_type == 'manuals':
+        m_tp += tp
+        m_fp += fp
+        m_m += m
+        m_n += n
+        m_c += 1
+    elif doc_type == 'scientific_articles':
+        sa_tp += tp
+        sa_fp += fp
+        sa_m += m
+        sa_n += n
+        sa_c += 1
+    else:  # patents
+        p_tp += tp
+        p_fp += fp
+        p_m += m
+        p_n += n
+        p_c += 1
+
+    # Overall tp, fp, m, n
+    o_tp += tp
+    o_fp += fp
+    o_m += m
+    o_n += n
+    o_c += 1
+
+    # Save collated text
+    gt_collated += ' '.join([entry['token'] for entry in gt_data]) + '\n'
+    et_collated += text + '\n'
+
+# Calculate scores (assuming function exists)
+score_fin = calculate_scores(fin_tp, fin_m, fin_n)
+score_gt = calculate_scores(gt_tp, gt_m, gt_n)
+score_lr = calculate_scores(lr_tp, lr_m, lr_n)
+score_sa = calculate_scores(sa_tp, sa_m, sa_n)
+score_m = calculate_scores(m_tp, m_m, m_n)
+score_p = calculate_scores(p_tp, p_m, p_n)
+score_o = calculate_scores(o_tp, o_m, o_n)
+
+# Write scores to file
+output_file = os.path.join(utils_folder, 'separate_token_score.txt')
+with open(output_file, 'w') as f:
+    f.write('Financial Documents\n' + str(score_fin) + '\nNumber of documents: ' + str(fin_c) + '\n\n')
+    f.write('Government Tenders\n' + str(score_gt) + '\nNumber of documents: ' + str(gt_c) + '\n\n')
+    f.write('Law and Regulations\n' + str(score_lr) + '\nNumber of documents: ' + str(lr_c) + '\n\n')
+    f.write('Scientific Articles\n' + str(score_sa) + '\nNumber of documents: ' + str(sa_c) + '\n\n')
+    f.write('Manuals\n' + str(score_m) + '\nNumber of documents: ' + str(m_c) + '\n\n')
+    f.write('Patents\n' + str(score_p) + '\nNumber of documents: ' + str(p_c) + '\n\n')
+    f.write('Overall Performance\n' + str(score_o) + '\nNumber of documents: ' + str(o_c) + '\n\n')
+    f.write('Undetected documents: ' + str(undetected_pdfs) + '\n\n')
+    f.write('Empty text files: ' + str(empty_text_files) + '\n\n')
+    f.write('Average time taken to parse 1 file: ' + str(np.mean(t_parse)) + '\n\n')
+
+# Collated format evaluation (assuming function exists)
+score_coll = calculate_scores(o_tp, o_m, o_n)
+output_file_collated = os.path.join(utils_folder, 'collated_token_score.txt')
+with open(output_file_collated, 'w') as f:
+    f.write(f"Collated Performance\n{score_coll}\nNumber of documents: {o_c}\n")
